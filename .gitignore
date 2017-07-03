@@ -1,6 +1,9 @@
 # This directory is meant for TLS/SSL assets, DO_TOKEN, etc
 secrets/
 
+# This directory is made for external assets
+builds/
+
 # This one is consequence of the TLS/SSL assets generation
 .srl
 

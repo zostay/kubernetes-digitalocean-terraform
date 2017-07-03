@@ -1,6 +1,10 @@
 #cloud-config
 
 write_files:
+  - path: "/etc/kubernetes/kubelet.env"
+    permissions: "0755"
+    content: |
+        KUBELET_ARGS="--volume-plugin-dir=/etc/kubernetes/volumeplugins"
   - path: "/etc/flannel/options.env"
     permissions: "0755"
     content: |
