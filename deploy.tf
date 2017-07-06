@@ -14,7 +14,7 @@
 
 variable "do_token" {}
 variable "do_region" {
-    default = "nyc3"
+    default = "nyc1"
 }
 variable "ssh_fingerprint" {}
 variable "ssh_private_key" {
@@ -42,6 +42,10 @@ variable "size_worker" {
     default = "512mb"
 }
 
+variable "size_mysql_disk" {
+    default = 5
+}
+
 ###############################################################################
 #
 # Specify provider
@@ -62,7 +66,7 @@ provider "digitalocean" {
 
 
 resource "digitalocean_droplet" "k8s_etcd" {
-    image = "coreos-stable"
+    image = "coreos-beta"
     name = "${var.prefix}k8s-etcd"
     region = "${var.do_region}"
     private_networking = true
@@ -168,7 +172,7 @@ data "template_file" "master_yaml" {
 
 
 resource "digitalocean_droplet" "k8s_master" {
-    image = "coreos-stable"
+    image = "coreos-beta"
     name = "${var.prefix}k8s-master"
     region = "${var.do_region}"
     private_networking = true
@@ -212,10 +216,20 @@ EOF
         }
     }
 
-    # Send the digitalocean flexvolume driver
+    # Send the Digital Ocean flexvolume driver
     provisioner "file" {
-        source = "./builds/digitalocean"
-        destination = "/home/core/digitalocean"
+        source = "./files/do-volume"
+        destination = "/home/core/do-volume"
+        connection {
+            type = "ssh"
+            user = "core"
+            private_key = "${file(var.ssh_private_key)}"
+        }
+    }
+
+    provisioner "file" {
+        content = "${var.do_token}"
+        destination = "/home/core/do.token"
         connection {
             type = "ssh"
             user = "core"
@@ -258,8 +272,11 @@ EOF
             "rm /home/core/{apiserver,apiserver-key}.pem",
             "sudo mkdir -p /etc/ssl/etcd",
             "sudo mv /home/core/{ca,client,client-key}.pem /etc/ssl/etcd/.",
-            "sudo mkdir -p /etc/kubernetes/volumeplugins/exec/digitalocean",
-            "sudo mv /home/core/digitalocean /etc/kubernetes/volumeplugins/exec/digitalocean/."
+            "sudo mkdir -p /etc/kubernetes/volumeplugins/5pi.de~do-volume",
+            "sudo mv /home/core/do-volume /etc/kubernetes/volumeplugins/5pi.de~do-volume/.",
+            "sudo chmod 755 /etc/kubernetes/volumeplugins/5pi.de~do-volume/do-volume",
+            "sudo mv /home/core/do.token /etc/.",
+            "sudo chmod 600 /etc/do.token"
         ]
         connection {
             type = "ssh",
@@ -314,7 +331,7 @@ data "template_file" "worker_yaml" {
 
 resource "digitalocean_droplet" "k8s_worker" {
     count = "${var.number_of_workers}"
-    image = "coreos-stable"
+    image = "coreos-beta"
     name = "${var.prefix}${format("k8s-worker-%02d", count.index + 1)}"
     region = "${var.do_region}"
     size = "${var.size_worker}"
@@ -325,8 +342,8 @@ resource "digitalocean_droplet" "k8s_worker" {
 
     # Send the digitalocean flexvolume driver
     provisioner "file" {
-        source = "./builds/digitalocean"
-        destination = "/home/core/digitalocean"
+        source = "./files/do-volume"
+        destination = "/home/core/do-volume"
         connection {
             type = "ssh"
             user = "core"
@@ -334,6 +351,15 @@ resource "digitalocean_droplet" "k8s_worker" {
         }
     }
 
+    provisioner "file" {
+        content = "${var.do_token}"
+        destination = "/home/core/do.token"
+        connection {
+            type = "ssh"
+            user = "core"
+            private_key = "${file(var.ssh_private_key)}"
+        }
+    }
 
     # Generate k8s_worker client certificate
     provisioner "local-exec" {
@@ -378,8 +404,11 @@ EOF
             "sudo cp /home/core/{ca,worker,worker-key}.pem /etc/kubernetes/ssl/.",
             "sudo mkdir -p /etc/ssl/etcd/",
             "sudo mv /home/core/{ca,worker,worker-key}.pem /etc/ssl/etcd/.",
-            "sudo mkdir -p /etc/kubernetes/volumeplugins/exec/digitalocean",
-            "sudo mv /home/core/digitalocean /etc/kubernetes/volumeplugins/exec/digitalocean/."
+            "sudo mkdir -p /etc/kubernetes/volumeplugins/5pi.de~do-volume",
+            "sudo mv /home/core/do-volume /etc/kubernetes/volumeplugins/5pi.de~do-volume/.",
+            "sudo chmod 755 /etc/kubernetes/volumeplugins/5pi.de~do-volume/do-volume",
+            "sudo mv /home/core/do.token /etc/.",
+            "sudo chmod 600 /etc/do.token"
         ]
         connection {
             type = "ssh",
@@ -404,6 +433,32 @@ EOF
         }
     }
 }
+
+###############################################################################
+#
+# Volumes
+#
+###############################################################################
+
+resource "digitalocean_volume" "mysql_disk" {
+    name = "mysql"
+    region = "${var.do_region}"
+    size = "${var.size_mysql_disk}"
+    description = "MySQL volume for all MySQL needs"
+}
+
+data "template_file" "volumes_yaml" {
+    template = "${file("${path.module}/04-volumes.yaml")}"
+    vars {
+        DO_VOLUME_MYSQL_ID = "${digitalocean_volume.mysql_disk.id}"
+    }
+}
+
+resource "local_file" "volumes_yaml" {
+    filename = "/tmp/volumes.yaml"
+    content = "${data.template_file.volumes_yaml.rendered}"
+}
+
 
 ###############################################################################
 #
@@ -446,6 +501,28 @@ resource "null_resource" "deploy_dns_addon" {
         command = <<EOF
             until kubectl get pods 2>/dev/null; do printf '.'; sleep 5; done
             kubectl create -f ${path.module}/03-dns-addon.yaml
+EOF
+    }
+}
+
+resource "null_resource" "deploy_volumes" {
+    depends_on = ["null_resource.setup_kubectl","digitalocean_volume.mysql_disk","local_file.volumes_yaml"]
+
+    provisioner "local-exec" {
+        command = <<EOF
+        kubectl get secret do-api-key || kubectl create secret generic do-api-key --from-literal=apiKey='$(zostay-get-secret DIGITAL_OCEAN_TOKEN)'
+        kubectl create -f /tmp/volumes.yaml
+EOF
+    }
+}
+
+resource "null_resource" "deploy_mysql" {
+    depends_on = ["null_resource.setup_kubectl","null_resource.deploy_volumes"]
+    provisioner "local-exec" {
+        command = <<EOF
+            until kubectl get pv 2>/dev/null; do printf '.'; sleep 5; done
+            kubectl get secret mysql-credentials || kubectl create secret generic mysql-credentials --from-literal=password="$(zostay-get-secret K8S_MYSQL_ROOT_PASSWORD)"
+            kubectl create -f ${path.module}/05-mysql.yaml
 EOF
     }
 }

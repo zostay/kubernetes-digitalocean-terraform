@@ -1,0 +1,181 @@
+#!/bin/bash
+
+# Copied from https://github.com/5pi/infra
+
+# set -euo pipefail
+exec 3>&1 # Preserve stdout
+exec > "/tmp/do-volume.$(id -gn).log" 2>&1
+
+DEV_PREFIX="/dev/disk/by-id/scsi-0DO_Volume_"
+DO_API="https://api.digitalocean.com"
+DO_TOKEN=
+
+CURL="curl -LSsf"
+DROPLET_ID=$($CURL "http://169.254.169.254/metadata/v1/id")
+REGION=$($CURL "http://169.254.169.254/metadata/v1/region")
+ACTION=
+
+ocean() {
+  local action=$1
+  local path=$2
+  shift 2
+  args=$(echo "$@" | sed 's/\([^ ][^=]*\)=\([^ ]*\)/"\1": "\2",/g;s/,$//')
+  $CURL -X "$action" "$DO_API/$path" \
+    -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer $DO_TOKEN" \
+    -d "{ $args }" 2>&1 # If curl suceeds, output is only stdout. If fails, only stderr
+}
+
+fatal() {
+  local msg="$1"
+  local device="${2:-}"
+  [ -t 2 ] && echo "Fatal: $msg" >&2
+  echo '{ "status": "Failure", "message": "'$msg'", "device": "'$device'" }' >&3
+  exit 1
+}
+
+success() {
+  local device="$1"
+  local msg="${2:-}"
+  [ -t 2 ] && echo "Success: $msg" >&2
+  echo '{ "status": "Success", "message": "'$msg'", "device": "'$device'" }' >&3
+  exit 0
+}
+
+init_vol() {
+  if ! which jq > /dev/null; then
+    fatal "jq required but not found in path" >&2
+  fi
+  success ""
+}
+
+attach_vol() {
+  local name=$(echo "$1" | jq -r .volume)
+
+  attached_id=$(ocean GET "v2/volumes?name=$name&region=$REGION" \
+    | jq -r '.volumes[0].droplet_ids[0]') \
+      || fatal "Couldn't retrieve volume"
+
+  if [[ "$attached_id" != "null" ]]; then
+    if [[ "$attached_id" -eq "$DROPLET_ID" ]]; then
+      success "${DEV_PREFIX}$name" "already attached"
+    fi
+    fatal "Volume already attached to $attached_id"
+  fi
+
+  response=$(ocean POST "v2/volumes/actions" \
+    "type=attach" \
+    "droplet_id=$DROPLET_ID" \
+    "volume_name=$name" \
+    "region=$REGION" \
+  ) || fatal "Couldn't attach volume: $response"
+  success "${DEV_PREFIX}$name"
+}
+
+device_to_name() {
+  local device="$1"
+  if [[ $device != ${DEV_PREFIX}* ]]; then
+    for f in ${DEV_PREFIX}*; do
+      t=$(readlink -f "$f")
+      if [[ "$t" == "$device" ]]; then
+	device="$f"
+	break
+      fi
+    done
+  fi
+  echo "${device#${DEV_PREFIX}}"
+}
+
+detach_vol() {
+  local device="$1"
+  local name=$(device_to_name "$device")
+  response=$(ocean POST "v2/volumes/actions" \
+    "type=detach" \
+    "droplet_id=$DROPLET_ID" \
+    "volume_name=$name" \
+    "region=$REGION"
+  ) || fatal "Couldn't detach volume: $response"
+  success "$device"
+}
+
+mount_vol() {
+  local mnt="$1"
+  local device="$2"
+  mkdir -p "$mnt"
+  mount "$device" "$mnt" || fatal "Couldn't mount $device on $mnt"
+  success "$device"
+}
+
+unmount_vol() {
+  local mnt="$1"
+  local device=$(grep "$mnt" /etc/mtab|cut -d' ' -f1)
+  if [[ -z "$device" ]]; then
+    success "$device" "Volume not mounted"
+  fi
+  umount "$mnt" || fatal "Couldn't unmount $mnt"
+  success "$device"
+}
+
+create_vol() {
+  local name="$1"
+  local size="$2"
+  shift 2
+  local comment="$@"
+  ocean POST "v2/volumes" \
+    "name=$name" \
+    "size_gigabytes=$size" \
+    "comment=$comment" \
+    "region=$REGION" \
+    || fatal "Couldn't create volume"
+}
+
+setup_token() {
+  DO_TOKEN=$(cat /etc/do.token 2>/dev/null) \
+    || fatal "/etc/do.token missing or unreadable"
+}
+
+main() {
+  if [ "$#" -lt 1 ]; then
+    fatal "Missing argument. Syntax: $0 create|init|attach|detach|mount|unmount"
+  fi
+  ACTION=$1
+  shift
+
+  if [ -n "${DEBUG:-}" ]; then
+    CURL="curl -Lf"
+    set -x
+  fi
+
+  case "$ACTION" in
+    init)
+      init_vol "$@"
+      ;;
+    attach)
+      [ "$#" -lt 1 ] && fatal "Missing argument. Syntax $0 attach <json-options>"
+      setup_token
+      attach_vol "$@"
+      ;;
+    detach)
+      [ "$#" -lt 1 ] && fatal "Missing argument. Syntax $0 detach <mount-device>"
+      setup_token
+      detach_vol "$@"
+      ;;
+    mount)
+      [ "$#" -lt 2 ] && fatal "Missing argument. Syntax $0 mount <target mount dir> <mount-device> <json options>"
+      mount_vol "$@"
+      ;;
+    unmount)
+      [ "$#" -lt 1 ] && fatal "Missing argument. Syntax $0 unmount <mount dir>"
+      unmount_vol "$@"
+      ;;
+    create)
+      [ "$#" -lt 2 ] && fatal "Missing argument. Syntax $0 create <name> <size-in-gb> [description...]"
+      create_vol "$@"
+      ;;
+    *)
+      fatal "Invalid action $ACTION"
+      ;;
+  esac
+}
+
+main "$@"

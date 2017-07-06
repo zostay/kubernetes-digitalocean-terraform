@@ -1,10 +1,6 @@
 #cloud-config
 
 write_files:
-  - path: "/etc/kubernetes/kubelet.env"
-    permissions: "0755"
-    content: |
-        KUBELET_ARGS="--volume-plugin-dir=/etc/kubernetes/volumeplugins"
   - path: "/etc/flannel/options.env"
     permissions: "0755"
     content: |
@@ -42,6 +38,7 @@ write_files:
           --client-ca-file=/etc/kubernetes/ssl/ca.pem \
           --api-servers=https://${MASTER_HOST} \
           --network-plugin-dir=/etc/kubernetes/cni/net.d \
+          --volume-plugin-dir=/etc/kubernetes/volumeplugins \
           --container-runtime=docker \
           --register-node=true \
           --allow-privileged=true \
