@@ -66,7 +66,7 @@ provider "digitalocean" {
 
 
 resource "digitalocean_droplet" "k8s_etcd" {
-    image = "coreos-beta"
+    image = "coreos-stable"
     name = "${var.prefix}k8s-etcd"
     region = "${var.do_region}"
     private_networking = true
@@ -172,7 +172,7 @@ data "template_file" "master_yaml" {
 
 
 resource "digitalocean_droplet" "k8s_master" {
-    image = "coreos-beta"
+    image = "coreos-stable"
     name = "${var.prefix}k8s-master"
     region = "${var.do_region}"
     private_networking = true
@@ -228,6 +228,16 @@ EOF
     }
 
     provisioner "file" {
+        source = "./builds/digitalocean"
+        destination = "/home/core/digitalocean"
+        connection {
+            type = "ssh"
+            user = "core"
+            private_key = "${file(var.ssh_private_key)}"
+        }
+    }
+
+    provisioner "file" {
         content = "${var.do_token}"
         destination = "/home/core/do.token"
         connection {
@@ -275,6 +285,9 @@ EOF
             "sudo mkdir -p /etc/kubernetes/volumeplugins/5pi.de~do-volume",
             "sudo mv /home/core/do-volume /etc/kubernetes/volumeplugins/5pi.de~do-volume/.",
             "sudo chmod 755 /etc/kubernetes/volumeplugins/5pi.de~do-volume/do-volume",
+            "sudo mkdir -p /etc/kubernetes/volumeplugins/tonyzou~digitalocean",
+            "sudo mv /home/core/digitalocean /etc/kubernetes/volumeplugins/tonyzou~digitalocean/.",
+            "sudo chmod 755 /etc/kubernetes/volumeplugins/tonyzou~digitalocean/digitalocean",
             "sudo mv /home/core/do.token /etc/.",
             "sudo chmod 600 /etc/do.token"
         ]
@@ -331,7 +344,7 @@ data "template_file" "worker_yaml" {
 
 resource "digitalocean_droplet" "k8s_worker" {
     count = "${var.number_of_workers}"
-    image = "coreos-beta"
+    image = "coreos-stable"
     name = "${var.prefix}${format("k8s-worker-%02d", count.index + 1)}"
     region = "${var.do_region}"
     size = "${var.size_worker}"
@@ -344,6 +357,16 @@ resource "digitalocean_droplet" "k8s_worker" {
     provisioner "file" {
         source = "./files/do-volume"
         destination = "/home/core/do-volume"
+        connection {
+            type = "ssh"
+            user = "core"
+            private_key = "${file(var.ssh_private_key)}"
+        }
+    }
+
+    provisioner "file" {
+        source = "./builds/digitalocean"
+        destination = "/home/core/digitalocean"
         connection {
             type = "ssh"
             user = "core"
@@ -407,6 +430,9 @@ EOF
             "sudo mkdir -p /etc/kubernetes/volumeplugins/5pi.de~do-volume",
             "sudo mv /home/core/do-volume /etc/kubernetes/volumeplugins/5pi.de~do-volume/.",
             "sudo chmod 755 /etc/kubernetes/volumeplugins/5pi.de~do-volume/do-volume",
+            "sudo mkdir -p /etc/kubernetes/volumeplugins/tonyzou~digitalocean",
+            "sudo mv /home/core/digitalocean /etc/kubernetes/volumeplugins/tonyzou~digitalocean/.",
+            "sudo chmod 755 /etc/kubernetes/volumeplugins/tonyzou~digitalocean/digitalocean",
             "sudo mv /home/core/do.token /etc/.",
             "sudo chmod 600 /etc/do.token"
         ]
@@ -510,7 +536,8 @@ resource "null_resource" "deploy_volumes" {
 
     provisioner "local-exec" {
         command = <<EOF
-        kubectl get secret do-api-key || kubectl create secret generic do-api-key --from-literal=apiKey='$(zostay-get-secret DIGITAL_OCEAN_TOKEN)'
+        until kubectl get secret 2>/dev/null; do printf '.'; sleep 5; done
+        kubectl get secret do-api-key || kubectl create secret generic do-api-key --from-literal=apiKey="$(zostay-get-secret DIGITAL_OCEAN_TOKEN)"
         kubectl create -f /tmp/volumes.yaml
 EOF
     }
