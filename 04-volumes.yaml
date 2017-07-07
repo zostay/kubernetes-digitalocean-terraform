@@ -8,11 +8,9 @@ spec:
   accessModes:
     - ReadWriteOnce
   flexVolume:
-    #driver: "5pi.de/do-volume"
     driver: "tonyzou/digitalocean"
     fsType: ext4
     secretRef:
       name: do-api-key
     options:
       volumeId: "${DO_VOLUME_MYSQL_ID}"
-      

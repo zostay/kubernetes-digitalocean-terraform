@@ -282,14 +282,9 @@ EOF
             "rm /home/core/{apiserver,apiserver-key}.pem",
             "sudo mkdir -p /etc/ssl/etcd",
             "sudo mv /home/core/{ca,client,client-key}.pem /etc/ssl/etcd/.",
-            "sudo mkdir -p /etc/kubernetes/volumeplugins/5pi.de~do-volume",
-            "sudo mv /home/core/do-volume /etc/kubernetes/volumeplugins/5pi.de~do-volume/.",
-            "sudo chmod 755 /etc/kubernetes/volumeplugins/5pi.de~do-volume/do-volume",
             "sudo mkdir -p /etc/kubernetes/volumeplugins/tonyzou~digitalocean",
             "sudo mv /home/core/digitalocean /etc/kubernetes/volumeplugins/tonyzou~digitalocean/.",
             "sudo chmod 755 /etc/kubernetes/volumeplugins/tonyzou~digitalocean/digitalocean",
-            "sudo mv /home/core/do.token /etc/.",
-            "sudo chmod 600 /etc/do.token"
         ]
         connection {
             type = "ssh",
@@ -427,14 +422,9 @@ EOF
             "sudo cp /home/core/{ca,worker,worker-key}.pem /etc/kubernetes/ssl/.",
             "sudo mkdir -p /etc/ssl/etcd/",
             "sudo mv /home/core/{ca,worker,worker-key}.pem /etc/ssl/etcd/.",
-            "sudo mkdir -p /etc/kubernetes/volumeplugins/5pi.de~do-volume",
-            "sudo mv /home/core/do-volume /etc/kubernetes/volumeplugins/5pi.de~do-volume/.",
-            "sudo chmod 755 /etc/kubernetes/volumeplugins/5pi.de~do-volume/do-volume",
             "sudo mkdir -p /etc/kubernetes/volumeplugins/tonyzou~digitalocean",
             "sudo mv /home/core/digitalocean /etc/kubernetes/volumeplugins/tonyzou~digitalocean/.",
             "sudo chmod 755 /etc/kubernetes/volumeplugins/tonyzou~digitalocean/digitalocean",
-            "sudo mv /home/core/do.token /etc/.",
-            "sudo chmod 600 /etc/do.token"
         ]
         connection {
             type = "ssh",
@@ -554,14 +544,3 @@ EOF
     }
 }
 
-# resource "null_resource" "deploy_microbot" {
-#     depends_on = ["null_resource.setup_kubectl"]
-#     provisioner "local-exec" {
-#         command = <<EOF
-#             sed -e "s/\$EXT_IP1/${digitalocean_droplet.k8s_worker.0.ipv4_address}/" < ${path.module}/04-microbot.yaml > ./secrets/04-microbot.rendered.yaml
-#             until kubectl get pods 2>/dev/null; do printf '.'; sleep 5; done
-#             kubectl create -f ./secrets/04-microbot.rendered.yaml
-# 
-# EOF
-#     }
-# }
